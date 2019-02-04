@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env python3
 """ Simple Python class to access the Tesla JSON API
 https://github.com/gglockner/teslajson
 
