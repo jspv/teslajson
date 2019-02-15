@@ -15,11 +15,10 @@ v.data_request('charge_state')
 v.command('charge_start')
 """
 
-
 from urllib.parse import urlencode
-from urllib.request import Request, build_opener
-from urllib.request import ProxyHandler, HTTPBasicAuthHandler, HTTPHandler, HTTPSHandler, HTTPError, URLError
-
+from urllib.request import (
+    Request, build_opener, ProxyHandler, HTTPBasicAuthHandler,
+    HTTPHandler, HTTPSHandler, HTTPError, URLError)
 import json
 import time
 import warnings
@@ -53,7 +52,8 @@ class Connection(object):
             userid: your login for teslamotors.com
             password: your password for teslamotors.com
           Option 2: (will use tokens directly and refresh tokens as needed)
-            tokenfile: File containing json tokens data, will update after refresh
+            tokenfile: File containing json tokens data, will update after
+            refresh
           Option 3: (use use specified token until it is invalid>
             access_token
 
@@ -64,8 +64,10 @@ class Connection(object):
         proxy_url: URL for proxy server
         proxy_user: username for proxy server
         proxy_password: password for proxy server
-        retries: Number of times we will retry command on HTTP failure beforing failing
-        retry_delay: Time in seconds we will multiplicatively back off after each failure
+        retries: Number of times we will retry command on HTTP failure beforing
+            failing
+        retry_delay: Time in seconds we will multiplicatively back off after
+            each failure
         debug: Turn on debugging of web traffic to tesla (non-proxy case)
         """
 
@@ -91,7 +93,10 @@ class Connection(object):
         # Validate that returned URL is going to tesla, to prevent MITM attack
         self.baseurl = self.current_client['baseurl']
         prefix = 'https://'
-        if not self.baseurl.startswith(prefix) or '/' in self.baseurl[len(prefix):] or not self.baseurl.endswith(('.teslamotors.com', '.tesla.com')):
+        if (not self.baseurl.startswith(prefix)
+                or '/' in self.baseurl[len(prefix):]
+                or not self.baseurl.endswith(('.teslamotors.com',
+                                              '.tesla.com'))):
             raise IOError("Unexpected URL (%s) from pastebin" % self.baseurl)
 
         # Prefix for API queries
@@ -116,7 +121,8 @@ class Connection(object):
                 with open(self.tokenfile, "r") as R:
                     self._update_tokens(stream=R)
             except IOError as e:
-                print("Could not open file {} and no other credentials specified".format(self.tokenfile), file=sys.stderr)
+                print("Could not open file {} and no other credentials "
+                      "specified".format(self.tokenfile), file=sys.stderr)
                 raise
 
         self.vehicles = [Vehicle(v, self) for v in sorted(
@@ -130,11 +136,12 @@ class Connection(object):
         """Utility command to post data to API"""
         if time.time() > self.expiration:
             self._refresh_token()
-        return self.__open("%s%s" % (self.api, command), headers=self.head, data=data)
+        return self.__open("%s%s" % (self.api, command),
+                           headers=self.head, data=data)
 
     def _user_agent(self):
         """Set the user agent"""
-        if not "User-Agent" in self.head:
+        if "User-Agent" not in self.head:
             self.head["User-Agent"] = 'teslajson.py ' + self.__version__
 
     def _sethead(self, access_token, expiration=float('inf')):
@@ -156,7 +163,7 @@ class Connection(object):
         self._sethead(self.access_token, expiration=self.expiration)
 
     def _refresh_token(self):
-        """Refresh tokens using either (preset) userid/password or refresh_token"""
+        """Refresh tokens using either userid/password or refresh_token"""
 
         if self.refresh_token:
             self.oauth = {
@@ -182,21 +189,23 @@ class Connection(object):
         last_except = Exception
         for count in range(self.tries):
             try:
-                req = Request("%s%s" % (baseurl, url), headers=headers)
+                req = Request("{}{}".format(baseurl, url), headers=headers)
+
+                # URLEncode any data
                 try:
-                    req.data = urlencode(data).encode('utf-8')  # Python 3
-                except:
-                    try:
-                        req.add_data(urlencode(data))  # Python 2
-                    except:
-                        pass
+                    req.data = urlencode(data).encode('utf-8')
+                except Exception:
+                    pass
 
                 # Proxy support
                 if self.proxy_url:
                     if self.proxy_user:
-                        proxy = ProxyHandler({'https': 'https://%s:%s@%s' % (self.proxy_user,
-                                                                             self.proxy_password,
-                                                                             self.proxy_url)})
+                        # ProxyHandler expects a dictionary of proxy mappings
+                        proxy = ProxyHandler({
+                            'https': 'https://{}:{}@{}'.format(
+                                self.proxy_user,
+                                self.proxy_password,
+                                self.proxy_url)})
                         auth = HTTPBasicAuthHandler()
                         opener = build_opener(proxy, auth, HTTPHandler)
                     else:
@@ -212,8 +221,8 @@ class Connection(object):
             except (HTTPError, URLError) as e:
                 last_except = e
                 if self.debug:
-                    print('# %d Timed out or other error for %s: %s\n' %
-                          (time.time(), type, str(e)))
+                    print('# {0:d} Timed out or other error'
+                          'for {}: {}\n'.format(time.time(), type, str(e)))
                 count += 1
                 if count != self.tries:
                     time.sleep(count * self.retry_delay)
@@ -249,7 +258,7 @@ class Vehicle(dict):
     def data_request(self, name):
         """Get vehicle data"""
         if name:
-            result = self.get('data_request/%s' % name)
+            result = self.get('data_request/%s'.format(name))
         else:
             result = self.get(name)
         return result['response']
@@ -260,18 +269,21 @@ class Vehicle(dict):
 
     def command(self, name, data={}):
         """Run the command for the vehicle"""
-        return self.post('command/%s' % name, data)
+        return self.post('command/{}'.format(name), data)
 
     def get(self, command):
         """Utility command to get data from API"""
         if command:
-            return self.connection.get('vehicles/%i/%s' % (self['id'], command))
+            return self.connection.get(
+                'vehicles/{:d}/{}'.format(self['id'], command))
         else:
-            return self.connection.get('vehicles/%i' % (self['id']))
+            return self.connection.get(
+                'vehicles/{:d}'.format(self['id']))
 
     def post(self, command, data={}):
         """Utility command to post data to API"""
-        return self.connection.post('vehicles/%i/%s' % (self['id'], command), data)
+        return self.connection.post(
+            'vehicles/{:d}/{}'.format(self['id'], command), data)
 
 
 def main():
@@ -290,9 +302,11 @@ do speed_limit_set_limit limit_mph=65
     parser.add_argument('--userid', default=None,
                         help='Tesla userid for authentication option 1')
     parser.add_argument('--tokenfile', '--tokens_file', default=None,
-                        help='File containing access token json for tesla service, authentication option 2')
-    parser.add_argument('--token', '--access_token', default=None, action='store_true',
-                        help='Access token for tesla service, authentication option 3')
+                        help='File containing access token json for tesla '
+                        'service, authentication option 2')
+    parser.add_argument('--token', '--access_token', default=None,
+                        action='store_true', help='Access token for tesla '
+                        'service, authentication option 3')
     parser.add_argument('--proxy_url', default=None,
                         help='URL for optional web proxy')
     parser.add_argument('--proxy_user', default=None,
@@ -363,8 +377,8 @@ do speed_limit_set_limit limit_mph=65
         elif args.command == "get":
             if not args.args:
                 print(str(v.data_request(None)))
-            elif (args.args[0] == "data" or args.args[0] == "vehicle_data" or
-                  args.args[0] == "mobile_enabled"):
+            elif (args.args[0] == "data" or args.args[0] == "vehicle_data"
+                  or args.args[0] == "mobile_enabled"):
                 print(str(v.get(args.args[0])))
             else:
                 print(str(v.data_request(args.args[0])))
