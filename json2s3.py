@@ -14,7 +14,8 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--streamname', help='Name of stream',
                         required=True)
-    parser.add_argument('--mins', help="minutes in each file (max 60)",
+    parser.add_argument('--mins',
+                        help="minutes in each file (default=5, max=60)",
                         default=5, type=int)
     args = parser.parse_args()
 
@@ -55,11 +56,12 @@ def main():
             # Time to create a new file
             if outfile is not None:
                 outfile.close()
-            outfilename = '{}-{}-{}-{}-{}'.format(outfilebase,
-                                                  secrets.token_hex(4),
-                                                  secrets.token_hex(2),
-                                                  secrets.token_hex(2),
-                                                  secrets.token_hex(4))
+            outfilename = '{}-{}-{}-{}-{}-{}'.format(outfilebase,
+                                                     secrets.token_hex(4),
+                                                     secrets.token_hex(2),
+                                                     secrets.token_hex(2),
+                                                     secrets.token_hex(2),
+                                                     secrets.token_hex(6))
             if not os.path.exists(outfiledir):
                 try:
                     os.makedirs(outfiledir)
