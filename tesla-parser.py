@@ -182,7 +182,7 @@ def analyzer(this, firstthismode, lastprevmode, save, lastthis, reallasttime):
                        save.charge_energy_added,
                        battery_range - lastprevmode.battery_range,
                        ((battery_range - lastprevmode.battery_range) * 3600.0
-                        / (thisti me - firstthismodetime).total_seconds()),
+                        / (thistime - firstthismodetime).total_seconds()),
                        (save.charge_energy_added * 100.0 /
                         (dblevel)) if dblevel > 0 else -0,
                        battery_range * 100.0 / save.usable_battery_level))
