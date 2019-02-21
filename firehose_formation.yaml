@@ -1,0 +1,102 @@
+AWSTemplateFormatVersion: 2010-09-09
+Description: 'Create a kinesis firehouse s3 delivery stream'
+
+Parameters:
+  S3BucketName:
+    Description: AWS S3 bucket name for storing events
+    Type: String
+  StreamName:
+    Description: Name of Kinesis firehose delivery stream for events
+    Type: String
+
+Resources:
+
+  # Create the role to give firehose access to the necessary s3
+  # bucket and CloudWatchLogs area.
+  TeslaJSONFirehouseAccessRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: firehose.amazonaws.com
+          Action: sts:AssumeRole
+          Condition:
+            StringEquals:
+              sts:ExternalId:
+                Ref: AWS::AccountId
+      Policies:
+      # name the policy firehose-StreamName-access-policy
+      - PolicyName: !Join ['', ['firehose-', !Ref StreamName, '-access-policy']]
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Sid: AllowAccessToS3Bucket
+            Effect: Allow
+            Action:
+            - s3:AbortMultipartUpload
+            - s3:GetBucketLocation
+            - s3:GetObject
+            - s3:ListBucket
+            - s3:ListBucketMultipartUploads
+            - s3:PutObject
+            Resource:
+            - !Join ['', ['arn:aws:s3:::', !Ref S3BucketName]]
+            - !Join ['', ['arn:aws:s3:::', !Ref S3BucketName, '/*']]
+          - Sid: AllowCloudWatchLogging
+            Effect: Allow
+            Action:
+            - logs:PutLogEvents
+            Resource:
+            - Fn::Join:
+              - ''
+              - - 'arn:aws:logs:'
+                - !Ref AWS::Region
+                - ":"
+                - !Ref AWS::AccountId
+                - ":log-group:/aws/kinesisfirehose/"
+                - !Ref StreamName
+                - ":log-stream:*"
+
+  # Policy can be assigned to any sender process/role to allow it
+  # to submit to the firehose
+  TeslaJSONFirehoseWriterPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Description: 'Allows Sending messages to firehose stream'
+    Properties:
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Action:
+            - firehose:PutRecord
+          Resource:
+            - Fn::GetAtt:
+              - TeslaJSONDeliveryStream
+              - Arn
+
+  TeslaJSONDeliveryStream:
+    Type: AWS::KinesisFirehose::DeliveryStream
+    Properties:
+      DeliveryStreamName:
+        Ref: StreamName
+      S3DestinationConfiguration:
+        BucketARN: !Join ['', ['arn:aws:s3:::', !Ref S3BucketName]]
+        BufferingHints:
+          IntervalInSeconds: 300
+          SizeInMBs: 1
+        Prefix: !Join ['',[!Ref StreamName, '/']]
+        CompressionFormat: "UNCOMPRESSED"
+        RoleARN:
+          Fn::GetAtt:
+            - "TeslaJSONFirehouseAccessRole"
+            - "Arn"
+
+Outputs:
+  TeslaJSONFirehoseWriterPolicyArn:
+    Description: Managed Policy allowing sending messages to TeslaJSON firehose streams
+    Value: !Ref TeslaJSONFirehoseWriterPolicy
+    Export:
+      Name: TeslaJSONFirehoseWriterPolicyArn

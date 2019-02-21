@@ -1,9 +1,22 @@
-# teslajson
-Simple Python class to access the Tesla JSON API.
+# teslatools
+Simple Python class to access the Tesla JSON API, tools to poll, store,
+and report on the data.
 
-Written by Greg Glockner
+## Project Goals
+0. Modify the code originally written by and forked from Greg Glockner to
+support logging vehicle output to AWS S3 via Kinesis Firehose. (**complete**)
+0. Update Greg's parser tools to work from S3 datastore (in progress)
+0. Create automation/cloudformations to:
+  0. Build and setup Kinesis delivery stream and associated policy for write access (**complete**)
+  0. Dedicated S3 bucket for the stream as well as a separate area for storing token data and an area for static html-based tools (not started)
+  0. Lambda or similar to parse and index the JSON data (not started)
+  0. Scrips to easily add the poller to an EC2 instance (not started)
+0. S3 based HTML tools to access and report on vehicle data (not started)
 
-## Description
+# Tool Descriptions
+
+## teslajson.py
+
 This is a simple Python interface to the [Tesla JSON
 API](https://tesla-api.timdorr.com/). With this, you can query your
 vehicle, control charge settings, turn on the air conditioning, and
@@ -17,16 +30,15 @@ methods on a _Vehicle_.  There is a single get method
 that the class does not require changes when there are minor updates
 to the underlying JSON API.
 
-This has been tested with Python 2.7 and Python 3.5.  It has no dependencies
-beyond the standard Python libraries.
+This has been tested Python 3.6.  It has no dependencies beyond the standard Python libraries.
 
-## Installation
+#### Installation
 0. Download the repository zip file and uncompress it
 0. Run the following command with your Python interpreter: `python setup.py install`
 
 Alternately, add the teslajson.py code to your program.
 
-## Public API
+#### Public API
 `Connection(email, password, **kwargs)`:
 Initialize the connection to the Tesla Motors website.
 
@@ -34,28 +46,27 @@ Required parameters:
 
 - Option one:
 
-  - _email_: your login for teslamotors.com
-  - _password_: your password for teslamotors.com
+  - _userid_: your login for teslamotors.com
 
-- Option two: (May be combined with option one)
+- Option two: (May be combined with option one to create a new tokenfile)
 
-  - _tokens\_file_: A file containing json token authentication data as tesla generates.  Updated when expires.
+  - _tokenfile_: A file containing json token authentication data as tesla generates.  It will automatically be updated when it expires.
 
 - Option three:
 
-  - _access\_token_: An active access token for your account.  May expire.
+  - _accesstoken_: An active access token for your account.  May expire.
 
 
 Optional parameters:
-
+- _password_: your password for teslamotors.com, note: if you don't pass it as a parameter, it will prompt you to enter it.
 - _proxy\_url_: URL for proxy server
 - _proxy\_user_: username for proxy server
 - _proxy\_password_: password for proxy server
 - _retries_: number of times to retry request before failing
 - _retry\_delay_: multiplicative backoff on failure
 - _tesla\_client_: Override API retrevial from pastebin
-- _debug_: Activate HTTP debugging
-
+- _debug_: Activate debugging, add more to debug
+- _vid_: Vehicle to operate on, if you have multiple vehicles
 
 `Connection.vehicles`: A list of Vehicle objects, corresponding to the
 vehicles associated with your account on teslamotors.com.
@@ -79,7 +90,7 @@ as _charge\_port\_door\_open_, _charge\_max\_range_. Returns a
 dictionary (_dict_).  For a full list of  _name_ values, see the _POST_ commands
 in the [Tesla JSON API](http://docs.timdorr.apiary.io/).
 
-## Example
+#### Example
 	import teslajson
 	c = teslajson.Connection('youremail', 'yourpassword')
 	v = c.vehicles[0]
@@ -87,13 +98,13 @@ in the [Tesla JSON API](http://docs.timdorr.apiary.io/).
 	v.data_request('charge_state')
 	v.command('charge_start')
 
-## Partial example:
+#### Partial example:
 
 	c = teslajson.Connection(access_token='b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c', tesla_client='{"v1": {"id": "e4a9949fcfa04068f59abb5a658f2bac0a3428e4652315490b659d5ab3f35a9e", "secret": "c75f14bbadc8bee3a7594412c31416f8300256d7668ea7e6e7f06727bfb9d220", "baseurl": "https://owner-api.teslamotors.com", "api": "/api/1/"}}')
 
-## Another example
+#### Another example
 
-	./teslajson.py --email my@email.com --pasword thepass --tokens_file /tmp/tesla.creds get
+	./teslajson.py --userid my@email.com --pasword thepass --tokens_file /tmp/tesla.creds get
 	./teslajson.py --tokens_file /tmp/tesla.creds --vid 0 get
 	./teslajson.py --tokens_file /tmp/tesla.creds --retries 10 do wake_up
 	./teslajson.py --tokens_file /tmp/tesla.creds get climate_state
@@ -103,41 +114,49 @@ in the [Tesla JSON API](http://docs.timdorr.apiary.io/).
 	./teslajson.py --tokens_file /tmp/tesla.creds do charge_port_door_open
 
 
-## Credits
+#### Credits
 Many thanks to [Tim Dorr](http://timdorr.com) for documenting the Tesla JSON API.
 This would not be possible without his work.
 
-## Disclaimer
+#### Disclaimer
 This software is provided as-is.  This software is not supported by or
 endorsed by Tesla Motors.  Tesla Motors does not publicly support the
 underlying JSON API, so this software may stop working at any time.  The
 author makes no guarantee to release an updated version to fix any
 incompatibilities.
 
+--------------------
 
-# tesla_poller
+## tesla_poller
 
-Written by Seth Robertson
+Originally written by Seth Robertson, modified by jspv to support AWS Kinesis delivery streams, simplified to just query the Tesla API and write the output to the designated targets, removed the original capability to send commands and the "insecure network API"
 
-## Description
+tesla_poller uses the teslajson library to do smart polling of your Tesla(s) and log the resulting JSON information to a directory and/or AWS Kinesis stream for post-processing. It will change polling frequency depending on what you are doing (e.g. driving, charging, pre-heating, nothing, etc).
 
-Use the teslajson library to do smart polling of your Tesla(s) and log
-the resulting JSON information to a directory for
-post-processing. Monitor different things with different frequency
-depending on what you are doing (e.g. driving, charging, pre-heating,
-nothing, etc).
+Required Parameters:
 
-Also support an insecure network API (so only allow local connections
-to use it!) with `--command 127.0.0.1:60001` (or some other local
-address:port combination to bind to) to allow specific commands to be
-executed on your behalf.  Currently only "quit" and "autocondition"
-are supported.  Autocondition requests additional change and turns on
-car climate control, to (e.g.) charge/heat the battery and get the
-interior heat/cooled as needed, soon before leaving. After leaving, it
-resets the desired battery charge back to normal.
+Required parameters:
+
+- Option one:
+
+  - _userid_: your login for teslamotors.com
+
+- Option two: (May be combined with option one to create a new tokenfile)
+
+  - _tokenfile_: A file containing json token authentication data as tesla generates.  It will automatically be updated when it expires.
+
+- Option three:
+
+  - _accesstoken_: An active access token for your account.  May expire.
+
 
 Command line arguments are requried for authentication: `--token`,
-`--tokenfile`, or `--email` and `--password`.
+`--tokenfile`, or `--userid`
+
+Optional parameters:
+- _password_: Password for --_userid_, you will be prompted if not provided
+- _outdir_: Directory to place json log files
+- _firehose_: Kinesis Firehose delivery stream to send json data to
 
 In order to log the data, supply an output directory with `--outdir
 path`.  In addition to a file named by YEAR-MON-DAY.json, there is a
@@ -145,6 +164,8 @@ symlink cur.json to the most recent file.
 
 You may override the intervals of important (polling frequency mostly)
 by using `--intervals inactive=61` or similar.
+
+---------
 
 ## Reading the stored data
 
