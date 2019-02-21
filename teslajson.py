@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """ Simple Python class to access the Tesla JSON API
-https://github.com/gglockner/teslajson
+Original fork from: https://github.com/gglockner/teslajson
 
 The Tesla JSON API is described at:
 https://tesla-api.timdorr.com/
@@ -82,22 +82,30 @@ class Connection(object):
         self.tokenfile = tokenfile
         self.access_token = access_token
         self.refresh_token = None
+        self.teslaapifile = "teslaapi.conf"
 
         # Obtain URL and program access tokens from pastebin if not on CLI
         if not tesla_client:
-            tesla_client = self.__open(
-                "/raw/0a8e0xTJ", baseurl="http://pastebin.com")
+            try:
+                with open(self.teslaapifile, "r") as R:
+                    tesla_client = json.load(R)
+            except IOError as e:
+                print("Could not open Tesla API Configuration file {}"
+                      .format(self.teslaapifile), file=sys.stderr)
+                raise
 
         self.current_client = tesla_client['v1']
 
         # Validate that returned URL is going to tesla, to prevent MITM attack
+        # (leftover from when it used to load from pastebin -  good to check)
         self.baseurl = self.current_client['baseurl']
         prefix = 'https://'
-        if (not self.baseurl.startswith(prefix)
-                or '/' in self.baseurl[len(prefix):]
-                or not self.baseurl.endswith(('.teslamotors.com',
-                                              '.tesla.com'))):
-            raise IOError("Unexpected URL (%s) from pastebin" % self.baseurl)
+        if (not self.baseurl.startswith(prefix) or
+                '/' in self.baseurl[len(prefix):] or
+                not self.baseurl.endswith(('.teslamotors.com',
+                                           '.tesla.com'))):
+            raise IOError(
+                "Unexpected URL ({}) in API location".format(self.baseurl))
 
         # Prefix for API queries
         self.api = self.current_client['api']
@@ -318,11 +326,10 @@ do speed_limit_set_limit limit_mph=65
     parser.add_argument('--retry_delay', default=1.5, type=float,
                         help='Multiplicative backup on failure')
     parser.add_argument('--tesla_client', default=None,
-                        help='Override API retrevial from pastebin')
+                        help='Override API location')
     parser.add_argument('--debug', default=False,
                         action='store_true', help='Example debugging')
     parser.add_argument('--vid', default=None, help='Vehicle to operate on')
-
     parser.add_argument('command', default='vehicles', nargs='?',
                         help='Command for program (get, do)')
     parser.add_argument('args', nargs='*', help='Command specific arguments')
@@ -377,8 +384,8 @@ do speed_limit_set_limit limit_mph=65
         elif args.command == "get":
             if not args.args:
                 print(str(v.data_request(None)))
-            elif (args.args[0] == "data" or args.args[0] == "vehicle_data"
-                  or args.args[0] == "mobile_enabled"):
+            elif (args.args[0] == "data" or args.args[0] == "vehicle_data" or
+                  args.args[0] == "mobile_enabled"):
                 print(str(v.get(args.args[0])))
             else:
                 print(str(v.data_request(args.args[0])))

@@ -46,7 +46,7 @@ Required parameters:
 
 - Option one:
 
-  - _userid_: your login for teslamotors.com
+  - _userid_: your login for teslamotors.com, you will be prompted to enter the password
 
 - Option two: (May be combined with option one to create a new tokenfile)
 
@@ -58,7 +58,6 @@ Required parameters:
 
 
 Optional parameters:
-- _password_: your password for teslamotors.com, note: if you don't pass it as a parameter, it will prompt you to enter it.
 - _proxy\_url_: URL for proxy server
 - _proxy\_user_: username for proxy server
 - _proxy\_password_: password for proxy server
@@ -133,13 +132,11 @@ Originally written by Seth Robertson, modified by jspv to support AWS Kinesis de
 
 tesla_poller uses the teslajson library to do smart polling of your Tesla(s) and log the resulting JSON information to a directory and/or AWS Kinesis stream for post-processing. It will change polling frequency depending on what you are doing (e.g. driving, charging, pre-heating, nothing, etc).
 
-Required Parameters:
-
 Required parameters:
 
 - Option one:
 
-  - _userid_: your login for teslamotors.com
+  - _userid_: your login for teslamotors.com, you will be prompted for the password
 
 - Option two: (May be combined with option one to create a new tokenfile)
 
@@ -154,7 +151,6 @@ Command line arguments are requried for authentication: `--token`,
 `--tokenfile`, or `--userid`
 
 Optional parameters:
-- _password_: Password for --_userid_, you will be prompted if not provided
 - _outdir_: Directory to place json log files
 - _firehose_: Kinesis Firehose delivery stream to send json data to
 
@@ -235,20 +231,21 @@ For example:
 If the data had already been inserted into the database in a previous
 run, the program will issue appropriate warnings.
 
-## Using the remote control
+-----------------
+## json2s3.py - Converting default JSON output to AWS Kinesis style
 
-The `poller_rpc.py` program implements a client side of the RPC.  It
-is pretty primitive.  Specify the remote address of the server with
-`--cmd_address 127.0.0.1:60001` or similar matching addressing.  Then
-you use --variables to specify commands.  Example:
+`json2s3.py` will take the output JSON output files created by `tesla-poller` and will write out a formatted directory and file structure used in the S3 repository of the AWS Kinesis delivery stream.  You can use this to reformat historical records so that they can be copied over to the S3 bucket and be compatible with new files created by Kinesis.
 
-        # Ask server to quit
-        ./poller_rpc.py --cmd_address 127.0.0.1:60001 --variables cmd=quit
-        # Do default autoconditioning
-        ./poller_rpc.py --cmd_address 127.0.0.1:60001 --variables cmd=autocondition
-        # Set battery charge limit to 77%, do NOT do cabin preconditioning
-        ./poller_rpc.py --cmd_address 127.0.0.1:60001 --variables cmd=autocondition --variables level=77 --variables temp=
+Output format is: streamname/YYYY/MM/DD/HH/streamname-1-YYYY-MM-DD-HH-mm-{hex8}-{hex4}-{hex4}-{hex4}-{hex12} where {hex#} is a number of random hex digits.
 
-## Bugs
+Required parameters:
+
+- _streamname_: name of the Kinesis stream, used to format the output files
+
+Optional parameters:
+
+  - _mins_: The number of minutes of data to store in each file, default is to write a new file for every 5 minutes of data.
+
+# Bugs
 
 Only tested with one vehicle.

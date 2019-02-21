@@ -1,4 +1,11 @@
 #!/usr/bin/env python3
+""" Reformat json files from tesla-parser to match Kinesis in S3
+
+Reformat json files created by tesla-parser into a directory
+structure and file format similar to AWS Kinesis.  The created
+files can be uploaded to s3
+"""
+
 import time
 import json
 import argparse

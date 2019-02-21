@@ -1,4 +1,7 @@
 #!/usr/bin/env python3
+""" Smartly poll the Tesla API and output the data in JSON
+"""
+
 import teslajson
 import time
 import json
@@ -244,9 +247,6 @@ def main():
                         "in {}".format(str(intervals.keys())))
     parser.add_argument('--userid', default=None,
                         help='Tesla userid for authentication option 1')
-    parser.add_argument('--password', default=None,
-                        help='Tesla password * OPTIONAL * it will be asked '
-                        'for if needed')
     parser.add_argument('--tokenfile', '--tokens_file', default=None,
                         help='File containing access token json for tesla '
                         'service, authentication option 2')
@@ -269,12 +269,15 @@ def main():
                         help='Be quiet, suppress stdout messages')
     args = parser.parse_args()
 
+    # Initialze password placeholder
+    args.password = None
+
     if not args.token and not args.tokenfile and not args.userid:
         print('''Must supply --token or --tokenfile or --userid''')
         sys.exit(1)
 
     # if userid has been set, prompt for the password
-    if args.userid and not args.password:
+    if args.userid:
         try:
             args.password = getpass.getpass(prompt='Tesla password: ')
         except Exception as err:
