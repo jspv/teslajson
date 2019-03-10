@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 class TeslaRecord(object):
     """ Information about a specific record retrieved from a tesla """
 
-    def __init__(self, line=None, tdata=None, want_offline=False):
+    def __init__(self, line=None, want_offline=False):
         """Create object from json text data from tesla_poller"""
         if self.jline:
             # Parse the line and update the object with the current state
@@ -95,27 +95,6 @@ class TeslaRecord(object):
             self.temp_unit = self._jget(["gui_settings",
                                          "gui_temperature_units"])
 
-        if tdata:
-            for k in ('timets', 'vehicle_id', 'state', 'car_locked',
-                      'odometer', 'is_user_present', 'valet_mode',
-                      'charging_state', 'usable_battery_level',
-                      'charge_miles_added', 'charge_energy_added',
-                      'charge_current_request', 'charger_power', 'charge_rate',
-                      'charger_voltage', 'battery_range', 'est_battery_range',
-                      'shift_state', 'speed', 'latitude', 'longitude',
-                      'heading', 'gps_as_of', 'climate_on', 'inside_temp',
-                      'outside_temp', 'battery_heater', 'vin', 'display_name',
-                      'car_type', 'car_special_type', 'perf_config',
-                      'has_ludicrous_mode', 'wheel_type', 'has_air_suspension',
-                      'exterior_color', 'option_codes', 'car_version'):
-                if k in tdata and tdata[k] is not None:
-                    if k in ('timets', 'gps_as_of'):
-                        setattr(self, k, float(tdata[k].strftime('%s')))
-                    else:
-                        setattr(self, k, tdata[k])
-                else:
-                    setattr(self, k, None)
-
         # Determine state of vehicle and define the session_type
         # mode is the 'internal' mode we use for tracking the different
         # states and messages, session_type is the type of session the
@@ -137,7 +116,7 @@ class TeslaRecord(object):
         else:
             self.session_type = self.mode
 
-    def __new__(cls, line=None, tdata=None, want_offline=False):
+    def __new__(cls, line=None, want_offline=False):
         """Evaluate the line and see if it meets initial criteria
 
         Ignore comments and attempt to JSON load the line.  Verify the JSON
@@ -192,66 +171,6 @@ class TeslaRecord(object):
                 return notfound
             info = info[key]
         return info
-
-    def sql_vehicle_insert_dict(self):
-        """Construct a dictionary with keys and values to insert
-
-        To be used in a psycopg2. Vehicle_id and vin need to exist so we
-        just add them
-        """
-
-        result = {}
-
-        for memid in ("vehicle_id", "vin", "display_name", "car_type",
-                      "car_special_type", "perf_config", "has_ludicrous_mode",
-                      "wheel_type", "has_air_suspension", "exterior_color",
-                      "option_codes", "car_version"):
-            if getattr(self, memid) is not None:
-                result[memid] = getattr(self, memid)
-
-        return result
-
-    def sql_vehicle_update_dict(self, current):
-        """Construct a dictionary with keys and values to change.
-
-           To be used in a psycopg2 update execute command. We assume vin
-           never changes, so we don't check it
-        """
-
-        result = {}
-
-        for memid in ("display_name", "car_type", "car_special_type",
-                      "perf_config", "has_ludicrous_mode", "wheel_type",
-                      "has_air_suspension", "exterior_color", "option_codes",
-                      "car_version"):
-            if current.get(memid, None) != getattr(self, memid):
-                result[memid] = getattr(self, memid)
-        return result
-
-    def sql_vehicle_status_insert_dict(self):
-        """Construct a dictionary to insert data into vehicle_status"""
-
-        result = {}
-
-        for memid in ("vehicle_id", "state", "car_locked", "odometer",
-                      "is_user_present", "shift_state", "speed", "latitude",
-                      "longitude", "heading", "charging_state",
-                      "usable_battery_level", "battery_range",
-                      "est_battery_range", "charge_rate", "charge_miles_added",
-                      "charge_energy_added", "charge_current_request",
-                      "charger_power", "charger_voltage", "inside_temp",
-                      "outside_temp", "climate_on", "battery_heater",
-                      "valet_mode"):
-            if getattr(self, memid) is not None:
-                result[memid] = getattr(self, memid)
-
-        result["timets"] = datetime.fromtimestamp(
-            float(self.timets), pytz.timezone("UTC")).isoformat()
-
-        if self.gps_as_of is not None:
-            result["gps_as_of"] = datetime.fromtimestamp(
-                float(self.gps_as_of), pytz.timezone("UTC")).isoformat()
-        return result
 
 
 class TeslaSession(object):

@@ -7,6 +7,7 @@ import logging
 
 logger = logging.getLogger(__name__)
 
+
 class Locate(object):
     """ Tools for determining location from lat/lon data including
         sqlite3 cache for reverse geocode lookups
@@ -18,7 +19,7 @@ class Locate(object):
     def __init__(self, fn='location_cache.db'):
         # Initilize Geolocator
         # g = geopy.geocoders.GoogleV3()
-        g = geopy.geocoders.Nominatim(user_agent=__name__, timeout=20)
+        self.g = geopy.geocoders.Nominatim(user_agent=__name__, timeout=20)
         self.conn = conn = sqlite3.connect(fn)
         cur = conn.cursor()
         cur.execute('CREATE TABLE IF NOT EXISTS '
@@ -63,6 +64,7 @@ class Locate(object):
     def _geolocate(self, location):
         """ Look up location data from lat/lon """
         tilehash = self._latlon_to_tile(location)
+        logger.debug('Looking up location {} with {}'.format(location, self.g))
         address_record = self._address_cached(tilehash)
         if address_record is False:
             latitude, longitude = location
