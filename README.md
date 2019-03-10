@@ -1,6 +1,5 @@
 # teslatools
-Simple Python class to access the Tesla JSON API, tools to poll, store,
-and report on the data.
+Simple Python class to access the Tesla JSON API and related tools to poll, store, and report on the data.
 
 ## Project Goals
 0. Modify the code originally written by and forked from Greg Glockner to
@@ -103,7 +102,8 @@ in the [Tesla JSON API](http://docs.timdorr.apiary.io/).
 
 #### Another example
 
-	./teslajson.py --userid my@email.com --pasword thepass --tokens_file /tmp/tesla.creds get
+	./teslajson.py --userid my@email.com --tokens_file /tmp/tesla.creds get
+  (get prompted for password)
 	./teslajson.py --tokens_file /tmp/tesla.creds --vid 0 get
 	./teslajson.py --tokens_file /tmp/tesla.creds --retries 10 do wake_up
 	./teslajson.py --tokens_file /tmp/tesla.creds get climate_state

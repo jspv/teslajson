@@ -5,68 +5,28 @@
 
 import argparse
 import datetime
+import pytz
 import subprocess
-import tesla_parselib
 import json
-import psycopg2
-import psycopg2.extras
 import sys
+import logging
+import verbosity
+from tesla_parselib import TeslaRecord, TeslaSession
 
-# Update if you cannot find this
-from psycopg2.extensions import AsIs
+logger = logging.getLogger(__name__)
 
-parser = argparse.ArgumentParser()
-parser.add_argument('--verbose', '-v', action='count',
-                    help='Increasing levels of verbosity')
-parser.add_argument('--nosummary', action='store_true',
-                    help='Do not print summary information')
-parser.add_argument('--follow', '-f', type=str,
-                    help='Follow this specific file')
-parser.add_argument('--numlines', '-n', type=str,
-                    help='Handle these number of lines')
-parser.add_argument('--outdir', default=None,
-                    help='Convert input files into daily output files')
-parser.add_argument('--dbconfig', type=str,
-                    help='Insert records in database using this config file')
-parser.add_argument('files', nargs='*')
-args = parser.parse_args()
-
-if args.verbose is None:
-    args.verbose = 0
-
-if not args.numlines:
-    args.numlines = "10"
-
-if args.follow:
-    args.files.append(None)
-
-if args.dbconfig:
-    # we are going to write data to the database
-    # read the config file and get database settings
-    dbfile = open(args.dbconfig, "r")
-    if dbfile:
-        dbinfo = json.loads(dbfile.read())
-        dbfile.close()
-    # open the database
-    try:
-        dbconn = psycopg2.connect(**dbinfo)
-        cursor = dbconn.cursor()
-        cursor.execute("SELECT version();")
-        record = cursor.fetchone()
-        if args.verbose:
-            print('Connected to {}\n'.format(str(record[0])))
-        cursor.close()
-    except (Exception, psycopg2.Error) as error:
-        print("Error while connecting to PostgreSQL", error)
-        exit()
-#    if(dbconn):
-#        cursor.close()
-#        dbconn.close()
-#        print("PostgreSQL connection closed\n")
+nexthour = 0
+X = None
+firstthismode = None
+lastprevmode = None
+save = None
+lastthis = None
+reallasttime = None
+args = None
 
 
 class openfile(object):
-    """Open a file"""
+    """Open a file or tail a file, return file descriptor"""
 
     def __init__(self, filename, args):
         self.filename = filename
@@ -74,8 +34,10 @@ class openfile(object):
             self.fd = open(filename, "r")
             self.sub = None
         else:
+            # Follow the file
             self.sub = subprocess.Popen(
-                ['tail', '-n', args.numlines, '-F', args.follow], stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                ['tail', '-n', args.numlines, '-F', args.follow],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             self.fd = self.sub.stdout
 
     def __enter__(self):
@@ -88,11 +50,8 @@ class openfile(object):
             self.sub.kill()
 
 
-nexthour = 0
-X = None
-
-
 def output_maintenance(cur):
+    """ Move to the next output file when time, close/reopen every hour"""
     global nexthour, X
     import time
     if not args.outdir:
@@ -125,21 +84,37 @@ def outputit(this):
     else:
         rate = ""
 
-    print("%s %-8s odo=%-7s spd=%-3s bat=%-12s chg@%-12s add=%s" %
-          (datetime.datetime.fromtimestamp(this.timets).strftime('%Y-%m-%d %H:%M:%S'),
-           this.mode,
-           "%.2f" % this.odometer if this.odometer else "",
-           str(this.speed or ""),
-           bat,
-           rate,
-           add))
+    return("%s %-8s odo=%-7s spd=%-3s bat=%-12s chg@%-12s add=%s" %
+           (datetime.datetime.fromtimestamp(this.timets).strftime('%Y-%m-%d %H:%M:%S'),
+            this.mode,
+            "%.2f" % this.odometer if this.odometer else "",
+            str(this.speed or ""),
+            bat,
+            rate,
+            add))
 
 
 def analyzer(this, firstthismode, lastprevmode, save, lastthis, reallasttime):
+    """ Analyze the status, tracking state and providing outputs
+
+    Parameters:
+        this(cls): object with the current data
+        firstthismode(cls): first object in the current mode
+        lastprevmode(cls): last object before the current mode
+        save(cls): Not sure yet
+        lastthis(cls): Not sure yet
+        reallasttime(time): timestamp from start of current mode
+
+
+    Returns:
+        updated: firstthismode, lastprevmode, save, lastthis, reallasttime)
+    """
+
+    # if vehicle is Polling (offline) exit quickly.
     if this.mode == "Polling":
         reallasttime = this.timets
-        if args.verbose > 1:
-            outputit(this)
+        logger.debug('\n{}'.format(outputit(this)))
+        exit()
         return (firstthismode, lastprevmode, save, lastthis, reallasttime)
 
     if save:
@@ -150,28 +125,42 @@ def analyzer(this, firstthismode, lastprevmode, save, lastthis, reallasttime):
 
     # analyze data and provide a summary
     while firstthismode and not args.nosummary:
+        # Detect a change in mode
         if firstthismode.mode != this.mode:
-
+            # jsp: looks to change the timets in the current object to be the
+            # timestamp of from the beginning of the last mode.  why?
             if reallasttime:
                 this.timets = reallasttime
                 reallasttime = None
-
             firstthismodetime = datetime.datetime.fromtimestamp(
                 firstthismode.timets)
             thistime = datetime.datetime.fromtimestamp(save.timets)
-            if not lastprevmode or not lastprevmode.usable_battery_level or not lastprevmode.odometer:
+
+            # If we don't know the end of the previous mode or don't have
+            # Battery and odometer levels, can't do much
+            if (not lastprevmode or
+                    not lastprevmode.usable_battery_level or
+                    not lastprevmode.odometer):
                 print("%s            ending %s, but did not have previous state to compute deltas" %
                       (firstthismodetime.strftime('%Y-%m-%d %H:%M:%S'), firstthismode.mode))
-            elif firstthismode.mode == "Charging":
-                battery_range = save.battery_range if save.battery_range > lastthis.battery_range else lastthis.battery_range
-                if this.usable_battery_level > save.usable_battery_level:
-                    usable_battery_level = this.usable_battery_level
-                elif save.usable_battery_level > lastthis.usable_battery_level:
-                    usable_battery_level = save.usable_battery_level
-                else:
-                    usable_battery_level = lastthis.usable_battery_level
 
-                usable_battery_level = save.usable_battery_level if save.usable_battery_level > lastthis.usable_battery_level else lastthis.usable_battery_level
+            # Did we just leave a "Charging" mode?
+            elif firstthismode.mode == "Charging":
+                battery_range = (save.battery_range
+                                 if save.battery_range > lastthis.battery_range
+                                 else lastthis.battery_range)
+                # if this.usable_battery_level > save.usable_battery_level:
+                #     usable_battery_level = this.usable_battery_level
+                # elif save.usable_battery_level > lastthis.usable_battery_level:
+                #     usable_battery_level = save.usable_battery_level
+                # else:
+                #     usable_battery_level = lastthis.usable_battery_level
+
+                usable_battery_level = (save.usable_battery_level
+                                        if save.usable_battery_level
+                                        > lastthis.usable_battery_level
+                                        else lastthis.usable_battery_level)
+
                 dblevel = usable_battery_level - lastprevmode.usable_battery_level
 
                 print("%s +%-16s Charged   %3d%% (to %3d%%) %5.2fkW %5.1fM (%3dmph, %4.1fkW %5.1fM max)" %
@@ -195,7 +184,7 @@ def analyzer(this, firstthismode, lastprevmode, save, lastthis, reallasttime):
                 drange = lastprevmode.battery_range - battery_range
 
                 if dodo > -1:
-                    print("%s +%-16s Drove  %6.2fM at cost of %2.0f%% %5.1fM at %5.1f%% efficiency" %
+                    print("%s +%-19s Drove  %6.2fM at cost of %2.0f%% %5.1fM at %5.1f%% efficiency" %
                           (firstthismodetime.strftime('%Y-%m-%d %H:%M:%S'),
                            str(thistime - firstthismodetime),
                            dodo,
@@ -206,7 +195,7 @@ def analyzer(this, firstthismode, lastprevmode, save, lastthis, reallasttime):
                 battery_range = save.battery_range if save.battery_range < lastthis.battery_range else lastthis.battery_range
                 usable_battery_level = lastthis.usable_battery_level
                 drange = lastprevmode.battery_range - battery_range
-                print("%s +%-16s Sat&Lost %2.0f%% %5.1fM or %5.1fM/d (to %3d%%)" %
+                print("%s +%-19s Parked %2.0f%% %5.1fM or %5.1fM/d (to %3d%%)" %
                       (firstthismodetime.strftime('%Y-%m-%d %H:%M:%S'),
                        str(thistime - firstthismodetime),
                        lastprevmode.usable_battery_level - usable_battery_level,
@@ -218,7 +207,7 @@ def analyzer(this, firstthismode, lastprevmode, save, lastthis, reallasttime):
                 battery_range = save.battery_range if save.battery_range < lastthis.battery_range else lastthis.battery_range
                 usable_battery_level = lastthis.usable_battery_level
                 drange = lastprevmode.battery_range - battery_range
-                print("%s +%-16s Conditioned %2.0f%% %5.1fM or %5.1fM/d (to %3d%%)" %
+                print("%s +%-19s Conditioned %2.0f%% %5.1fM or %5.1fM/d (to %3d%%)" %
                       (firstthismodetime.strftime('%Y-%m-%d %H:%M:%S'),
                        str(thistime - firstthismodetime),
                        lastprevmode.usable_battery_level - usable_battery_level,
@@ -238,162 +227,108 @@ def analyzer(this, firstthismode, lastprevmode, save, lastthis, reallasttime):
         lastprevmode = save
     lastthis = save
 
-    if args.verbose:
-        outputit(this)
+    logger.debug('{}'.format(outputit(this)))
 
     return (firstthismode, lastprevmode, save, lastthis, reallasttime)
 
 
-firstthismode = None
-lastprevmode = None
-save = None
-lastthis = None
-reallasttime = None
+def main():
+    global firstthismode, lastprevmode, save, lastthis, reallasttime, args
+    session = None
+    parser = argparse.ArgumentParser()
+    # parser.add_argument('--verbose', '-v', action='count',
+    #                     help='Increasing levels of verbosity')
+    parser.add_argument('--nosummary', action='store_true',
+                        help='Do not print summary information')
+    parser.add_argument('--follow', '-f', type=str,
+                        help='Follow this specific file')
+    parser.add_argument('--numlines', '-n', type=str,
+                        help='Handle these number of lines')
+    parser.add_argument('--timezone', default=None,
+                        help='Timezone for output, defaults to local')
+    parser.add_argument('--outdir', default=None,
+                        help='Convert input files into daily output files')
+    parser.add_argument('files', nargs='*')
+    verbosity.add_arguments(parser)
+    args = parser.parse_args()
 
-if args.dbconfig and not args.files:
-    cursor = dbconn.cursor(cursor_factory=psycopg2.extras.DictCursor)
-    query = 'SELECT * FROM vehicle;'
-    cursor.execute(query)
-    for vres in cursor.fetchall():
-        query = 'SELECT * FROM vehicle_status where vehicle_id=%s order by timets;'
-        cursor.execute(query, (vres['vehicle_id'],))
-        for res in cursor.fetchall():
-            ares = dict(vres)
-            ares.update(res)
-            this = tesla_parselib.tesla_record(
-                line=None, tdata=ares, want_offline=(args.verbose > 2))
-            (firstthismode, lastprevmode, save, lastthis, reallasttime) = analyzer(
-                this, firstthismode, lastprevmode, save, lastthis, reallasttime)
-    sys.exit(0)
+    # initialize logging handle logging arguments
+    verbosity.initialize(logger)
+    verbosity.handle_arguments(args, logger)
 
-# loop over all files
-for fname in args.files:
-    with openfile(fname, args) as R:
-        linenum = 0
-        # loop over all json records (one per line)
-        while True:
-            # read a line
-            line = R.readline()
-            linenum += 1
-            if not line:
-                break
-            # parse the json into 'this' object
-            this = tesla_parselib.tesla_record(
-                line, want_offline=args.verbose > 2)
+    # if args.verbose is None:
+    #     args.verbose = 0
 
-            # if no valid object move on to the next
-            if not this:
-                continue
+    if not args.numlines:
+        args.numlines = "10"
 
-            # if we are using the database fill it up!
-            if args.dbconfig:
-                # check if this vehicle_id is already in the vehicle table
-                try:
-                    cursor = dbconn.cursor(
-                        cursor_factory=psycopg2.extras.DictCursor)
-                    query = 'SELECT * FROM vehicle WHERE vehicle_id=%s;'
-                    cursor.execute(query, (this.vehicle_id,))
-                except (Exception, psycopg2.Error) as error:
-                    if(dbconn):
-                        print(error)
-                        print("Failed to query vehicle table, cannot continue")
-                        exit()
-                if cursor.rowcount < 1:
-                    # this is the first time we've seen this car, add it
-                    insert_str = "INSERT INTO vehicle (%s) VALUES %s"
-                    insertargs = this.sql_vehicle_insert_dict()
-                    columns = insertargs.keys()
-                    values = insertargs.values()
-                    try:
-                        cursor.execute(
-                            insert_str, (AsIs(','.join(columns)), tuple(values)))
-                    except (Exception, psycopg2.Error) as error:
-                        if args.verbose > 0:
-                            print(error)
-                        print(
-                            "Failed to insert record into vehicle table, skipping status")
-                        dbconn.rollback()
-                        cursor.close()
-                        continue
-                    else:
-                        dbconn.commit()
+    if args.follow:
+        args.files.append(None)
+
+    # Get timezone to use for output (default to local)
+    if args.timezone:
+        tzone = pytz.timezone(args.timezone)
+    else:
+        tzone = datetime.datetime.now().astimezone().tzinfo
+
+    # loop over all files
+    for fname in args.files:
+        with openfile(fname, args) as R:
+            linenum = 0
+            # loop over all json records (one per line)
+            while True:
+                # read a line
+                line = R.readline()
+                linenum += 1
+                if not line:
+                    break
+                # parse the json into 'this' object
+                # this = TeslaRecord(line, want_offline=args.verbose > 2)
+                this = TeslaRecord(line)
+
+                # if no valid object move on to the next
+                if not this:
+                    continue
+
+                # output data to file in outdir
+                if args.outdir:
+                    output_maintenance(this.timets)
+                    X.write(line)
+
+                # outputit(this)
+
+                # If car is asleep, move along - TODO
+                if this.mode == "Polling":
+                    continue
+
+                # Initialize first session if needed
+                if session is None:
+                    session = TeslaSession.create(this, tzone=tzone)
+
+                # Check for a state change
+                if this.session_type == session.type:
+                    # update the session with data from current record
+                    session.update(this)
+                    since_last = session.since_last
                 else:
-                    # we've already got this car, check if anything changed and update
-                    res = cursor.fetchone()
-                    # check if we need to update anything and get the string for the update
-                    updateargs = this.sql_vehicle_update_dict(res)
-                    # update the row if needed
-                    if len(updateargs) > 1:
-                        query = "UPDATE vehicle SET (%s) = %s WHERE vehicle_id = %s"
-                        vals = (AsIs(','.join(updateargs.keys())), tuple(
-                            updateargs.values()), this.vehicle_id)
-                        try:
-                            cursor.execute(query, vals)
-                        except (Exception, psycopg2.Error) as error:
-                            if args.verbose > 0:
-                                print(error)
-                            print("Failed to update record in vehicle table")
-                            dbconn.rollback()
-                        else:
-                            dbconn.commit()
-                # close cursor and open a new one to clear any possible error
-                try:
-                    cursor.close()
-                except (Exception, psycopg2.Error) as error:
-                    print(error)
-                    print("Trouble with the database connection, cannot continue")
-                    exit()
-                cursor = dbconn.cursor()
-                # add a new vehicle_status row
-                # if the user wants verbosity we will expose duplicate key errors
-                # if no verbosity is requested we silently skip inserts with duplicate key
-                insert_str = "INSERT INTO vehicle_status (%s) VALUES %s"
-                insertargs = this.sql_vehicle_status_insert_dict()
-                columns = insertargs.keys()
-                values = insertargs.values()
-                try:
-                    cursor.execute(
-                        insert_str, (AsIs(','.join(columns)), tuple(values)))
-                except psycopg2.Error as error:
-                    if args.verbose > 0:
-                        if error.diag.sqlstate == '23505':
+                    # We have a state change, start new session
+                    session.close(this)
+                    session.pprint()
+                    session = TeslaSession.create(this, tzone=tzone)
+                    since_last = session.since_last
 
-                            dbconn.rollback()
-                            if len(insertargs.keys()) > 3:
-                                update_str = "UPDATE vehicle_status SET (%s) = %s WHERE vehicle_id = %s AND timets = %s"
-                                updateargs = dict(insertargs)
-                                del(updateargs['vehicle_id'])
-                                del(updateargs['timets'])
-                                columns = updateargs.keys()
-                                values = updateargs.values()
-                                cursor.execute(update_str, (AsIs(','.join(columns)), tuple(
-                                    values), insertargs['vehicle_id'], insertargs['timets']))
-                            else:
-                                # Trivial update
-                                pass
-#                                print("Did not insert record into vehicle_status: duplicate timestamp and short: %s"%str(insertargs))
-#                                if args.verbose>1:
-#                                    print('vehicle: {} timestamp: {}'.format(insertargs['vehicle_id'],insertargs['timets']))
-                        else:
-                            print(error.diag.sqlstate)
-                            print(
-                                "Error: failed to insert record into vehicle_status: %s" % str(error))
-                            dbconn.rollback()
-                except Exception as error:
-                    print(
-                        "Error: failed to insert record into vehicle_status: %s" % str(error))
-                    dbconn.rollback()
-                else:
-                    dbconn.commit()
-                # close this cursor, will open a new one in next iteration
-                cursor.close()
-                # as we are inserting data into the database we do nothing else with this record
-                continue
+                if since_last > 12000:
+                    fmt = '{} ({}s)since last record. sess:({}), ts:{}, {}'
+                    logger.debug(fmt.format(
+                        datetime.timedelta(seconds=since_last),
+                        since_last,
+                        session.session_no,
+                        this.timets,
+                        session._fmt_ts(this.timets)))
 
-            # output data to file in outdir
-            if args.outdir:
-                output_maintenance(this.timets)
-                X.write(line)
+                # (firstthismode, lastprevmode, save, lastthis, reallasttime) = analyzer(
+                #     this, firstthismode, lastprevmode, save, lastthis, reallasttime)
 
-            (firstthismode, lastprevmode, save, lastthis, reallasttime) = analyzer(
-                this, firstthismode, lastprevmode, save, lastthis, reallasttime)
+
+if __name__ == "__main__":
+    main()

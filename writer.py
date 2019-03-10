@@ -66,7 +66,7 @@ class Writer:
         )
 
     def __output_maintenance(self, outdir, outfile):
-        """Move to the next output file if it's time, close/reopen evey hour"""
+        """Move to the next output file when time, close/reopen every hour"""
         cur = time.time()
 
         # Ensure we don't have multi-vehicle output direct race conditions
